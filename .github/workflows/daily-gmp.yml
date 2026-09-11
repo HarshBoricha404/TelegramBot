@@ -1,4 +1,4 @@
-name: Daily IPO GMP Digest
+name: Daily IPO Signal
 
 on:
   schedule:
@@ -9,9 +9,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: daily-ipo-signal
+  cancel-in-progress: false
+
 jobs:
-  post-digest:
+  post-signal:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,9 +30,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Post digest to Telegram
+      - name: Run tests
+        run: pytest -q
+
+      - name: Post IPO signal to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          MIN_GAIN_PCT: ${{ secrets.MIN_GAIN_PCT }}
+          MIN_GAIN_PCT: ${{ vars.MIN_GAIN_PCT }}
         run: python -m src.main

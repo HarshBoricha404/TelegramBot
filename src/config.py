@@ -15,15 +15,17 @@ class Config:
     telegram_bot_token: str
     telegram_channel_id: str
     min_gain_pct: float
-    gmp_url: str = "https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/"
 
 
 def load_min_gain_pct() -> float:
-    min_gain_raw = os.getenv("MIN_GAIN_PCT", "10").strip()
+    min_gain_raw = os.getenv("MIN_GAIN_PCT", "").strip() or "10"
     try:
-        return float(min_gain_raw)
+        value = float(min_gain_raw)
     except ValueError as exc:
         raise ValueError(f"MIN_GAIN_PCT must be a number, got {min_gain_raw!r}") from exc
+    if not 0 <= value <= 100:
+        raise ValueError("MIN_GAIN_PCT must be between 0 and 100")
+    return value
 
 
 def load_bot_token() -> str:
@@ -31,21 +33,6 @@ def load_bot_token() -> str:
     if not token:
         raise ValueError("TELEGRAM_BOT_TOKEN is required (set it in .env)")
     return token
-
-
-def load_timezone() -> str:
-    return os.getenv("TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
-
-
-def load_daily_post_hour() -> int:
-    raw = os.getenv("DAILY_POST_HOUR", "9").strip()
-    try:
-        hour = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"DAILY_POST_HOUR must be 0-23, got {raw!r}") from exc
-    if hour < 0 or hour > 23:
-        raise ValueError(f"DAILY_POST_HOUR must be 0-23, got {hour}")
-    return hour
 
 
 def load_config() -> Config:

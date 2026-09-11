@@ -1,102 +1,99 @@
-# IPO GMP Daily Telegram Reminder Bot
+# IPO Signal Telegram Bot
 
-Scrapes [IPO Watch GMP](https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/), filters profitable Upcoming/Open IPOs (default ≥ 10% est. gain), and:
+A free, deterministic Indian IPO signal bot. It validates current grey-market data, ranks actionable IPOs, and posts one daily Telegram update at **9:00 AM IST** using GitHub Actions.
 
-1. **Posts automatically every morning at 9:00 AM IST** to `TELEGRAM_CHANNEL_ID`
-2. **Replies when you send `/gmp`** in a DM with the bot
+It uses no paid API, AI model, database, browser automation, or always-on server.
 
-GMP is unofficial and not investment advice.
+## What it checks
 
-## Setup
+Primary sources:
+
+- [IPO Watch live GMP](https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/) for Mainboard/SME type, GMP, trend, price, estimated listing gain, status, and timestamps
+- [IPO Watch subscription status](https://ipowatch.in/ipo-subscription-status-today/) for QIB, NII, retail, and total demand
+- IPO Watch detail pages for the top three candidates' total issue size, lot/application amount, listing date, and annual revenue/PAT
+
+[IPO Premium](https://www.ipopremium.in/) is used to cross-check top GMP values and as a fallback when IPO Watch cannot be parsed.
+
+The bot never averages unofficial GMP values. A material source disagreement lowers confidence.
+
+## Signal rules
+
+Only an IPO that is open today, has fresh and parseable data, positive GMP, and meets `MIN_GAIN_PCT` can receive `CONSIDER`.
+
+- `CONSIDER`: actionable open IPO with signal score at least 60
+- `WATCH`: upcoming, stale/disputed, or below the strong threshold
+- `LOW SIGNAL`: non-positive GMP or weak/conflicting evidence
+
+The 0–100 signal score uses capped GMP strength, live subscription demand, Mainboard liquidity preference, freshness/source agreement, and GMP trend. Verified recent losses or persistent annual PAT decline reduce the score. Missing optional detail metadata is neutral.
+
+Mainboard is preferred. An SME becomes the primary pick only when its score is at least 15 points above the best qualifying Mainboard IPO, or no Mainboard IPO qualifies.
+
+At 9:00 AM, same-day bidding has not started. Subscription figures are therefore usually the latest prior-session snapshot; the Telegram message displays the source timestamps.
+
+## Telegram setup
+
+1. Create a bot with [@BotFather](https://t.me/BotFather).
+2. For a channel, add the bot as an administrator with permission to post.
+3. For a direct message, send the bot a message first and use your numeric Telegram chat ID.
+
+## Free GitHub Actions deployment
+
+Push the repository to GitHub, then open:
+
+**Settings → Secrets and variables → Actions**
+
+Create repository secrets:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHANNEL_ID` — numeric chat ID, `@channel`, or `-100...` channel ID
+
+Optionally create repository variable:
+
+- `MIN_GAIN_PCT` — defaults to `10` when absent or empty
+
+Open **Actions → Daily IPO Signal → Run workflow** and verify the first Telegram message against IPO Watch.
+
+The workflow runs from the default branch at `30 3 * * *` UTC (9:00 AM IST). GitHub may delay or occasionally drop scheduled jobs. In public repositories, GitHub automatically disables scheduled workflows after 60 days without repository activity; open the workflow and select **Enable workflow** to resume it.
+
+Standard runners are free for public repositories. GitHub Free private repositories include 2,000 Actions minutes per month; this bot normally uses far less than one minute per day.
+
+## Local test and one-off post
 
 ```bash
-cd /Users/harshboricha/Desktop/TelegramBot
+cd /Users/harsh/Desktop/TelegramBot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env`:
-
-```
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHANNEL_ID=...          # your user id, @channel, or -100... channel id
-MIN_GAIN_PCT=10
-TIMEZONE=Asia/Kolkata
-DAILY_POST_HOUR=9
-```
-
-### Telegram bot
-
-1. Create a bot with [@BotFather](https://t.me/BotFather) → put token in `.env`
-2. For channel posts: add the bot as channel **admin** (Post Messages) and set channel id
-3. For DM-only: set `TELEGRAM_CHANNEL_ID` to your numeric user id (works today)
-
-## Deploy free with GitHub Actions (recommended)
-
-The workflow [`.github/workflows/daily-gmp.yml`](.github/workflows/daily-gmp.yml) posts the digest every day at **9:00 AM IST** in the cloud — your Mac does not need to be awake.
-
-1. Push this repo to GitHub
-2. Repo → **Settings → Secrets and variables → Actions → New repository secret**
-   - `TELEGRAM_BOT_TOKEN`
-   - `TELEGRAM_CHANNEL_ID`
-   - `MIN_GAIN_PCT` (optional; defaults unused if empty — set `10`)
-3. Repo → **Actions → Daily IPO GMP Digest → Run workflow** to test
-4. Schedule runs automatically at 9:00 AM IST (`cron: 30 3 * * *` UTC)
-
-`/gmp` replies still need the local listener (`python -m src.listen`) or a separate always-on host.
-
----
-
-## Run automatically on Mac (optional /gmp + backup)
-
-### Morning digest (9:00 AM)
-A cron job is used:
-
-```
-0 9 * * * cd /Users/harshboricha/Desktop/TelegramBot && .venv/bin/python -m src.main >> logs/cron.log 2>&1
-```
-
-Your Mac timezone should be set to IST (or change the cron hour). The Mac must be awake at 9 AM.
-
-### `/gmp` replies anytime
-The listener must be running:
+Add the real token and destination to `.env`, then run:
 
 ```bash
-cd /Users/harshboricha/Desktop/TelegramBot
-nohup .venv/bin/python -m src.listen >> logs/bot.out.log 2>> logs/bot.err.log &
-```
-
-It also posts the morning digest itself at 9:00 AM IST while running (in addition to cron as a backup).
-
-Optional LaunchAgent: `./scripts/install_launchd.sh`  
-If the project stays on Desktop, grant **Full Disk Access** to `.venv/bin/python` or LaunchAgent cannot read the folder.
-
-## Manual commands
-
-```bash
-# Always-on bot (DM commands + morning schedule)
-python -m src.listen
-
-# One-off digest post
+pytest -q
 python -m src.main
 ```
 
-In Telegram, message the bot:
+Tests use committed HTML fragments and make no network requests.
 
-- `/start` — help
-- `/gmp` — profitable IPO digest now
+## Failure behavior
 
-## Filter rules
-
-- Status: `Upcoming` or `Open` only
-- Types: Mainboard and SME
-- Gain: estimated listing % ≥ `MIN_GAIN_PCT` (default `10`)
+- Network timeouts, HTTP 429, and server errors receive bounded retries.
+- Unexpected/stale page layouts fail closed instead of producing a confident pick.
+- If both GMP sources fail, the bot attempts a short Telegram operational alert and the Actions job exits non-zero.
+- Telegram messages use escaped HTML and stay below the 4096-character limit.
+- Tokens are never included in source URLs, logs, or error messages.
 
 ## Project layout
 
-- `src/listen.py` — always-on bot (`/gmp` + 9 AM schedule)
-- `src/main.py` — one-off digest post
-- `src/scraper.py` / `filter.py` / `formatter.py` / `digest.py`
-- `launchd/com.telegrambot.ipogmp.plist` — macOS auto-start
+- `src/models.py` — normalized market and signal models
+- `src/scraper.py` — source parsing, validation, enrichment, and fallback
+- `src/recommend.py` — eligibility, score, confidence, and Mainboard preference
+- `src/formatter.py` — safe Telegram HTML
+- `src/digest.py` — pipeline orchestration
+- `src/main.py` — one-shot entry point used by GitHub Actions
+- `tests/` — offline parser, scoring, and formatter tests
+
+## Disclaimer
+
+GMP is unofficial and unregulated by SEBI. This bot provides an informational signal, not personalized investment advice or guaranteed returns. Confirm the RHP, exchange data, application amount, and your own risk tolerance before investing.
