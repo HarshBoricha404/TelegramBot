@@ -16,6 +16,8 @@ concurrency:
 jobs:
   post-signal:
     runs-on: ubuntu-latest
+    # Secrets live in Settings → Environments → TELEGRAM_BOT_TOKEN
+    environment: TELEGRAM_BOT_TOKEN
     timeout-minutes: 5
     steps:
       - name: Checkout
