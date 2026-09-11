@@ -2,9 +2,8 @@ name: Daily IPO Signal
 
 on:
   schedule:
-    # Temporary: every 5 minutes (GitHub's minimum). Switch back to daily after testing.
-    # Daily 9:00 AM IST = 3:30 AM UTC → cron: "30 3 * * *"
-    - cron: "*/5 * * * *"
+    # 9:00 AM IST = 3:30 AM UTC
+    - cron: "30 3 * * *"
   workflow_dispatch:
 
 permissions:
