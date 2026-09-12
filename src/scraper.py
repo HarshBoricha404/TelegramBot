@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-from src.models import IpoDetails, IpoRecord, SubscriptionData
+from src.models import GmpCalibration, IpoDetails, IpoRecord, SubscriptionData, finalize_ipo_record
 
 GMP_URL = "https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/"
 SUBSCRIPTION_URL = "https://ipowatch.in/ipo-subscription-status-today/"
@@ -91,6 +91,10 @@ def _canonical_header(text: str) -> str:
         return "price"
     if "est" in value and "listing" in value:
         return "estimated"
+    if "listing price" in value:
+        return "listing_price"
+    if value in {"ipo price", "issue price"} and "band" not in value:
+        return "ipo_price"
     if value in {"date", "ipo date"}:
         return "date"
     if value == "type":
@@ -103,6 +107,10 @@ def _canonical_header(text: str) -> str:
         return "open"
     if value == "close" or "closing date" in value:
         return "close"
+    if "fresh" in value:
+        return "fresh issue"
+    if value in {"ofs"} or "offer for sale" in value:
+        return "ofs"
     if value.startswith("qib"):
         return "qib"
     if value.startswith("nii") or value.startswith("hni"):
@@ -113,6 +121,16 @@ def _canonical_header(text: str) -> str:
         return "total"
     if "listing date" in value:
         return "listing_date"
+    if "ipo listing" in value or value == "listing":
+        return "listing_venue"
+    if "pre" in value and ("%" in text or "percent" in text.lower()):
+        return "pre_pct"
+    if "post" in value and ("%" in text or "percent" in text.lower()):
+        return "post_pct"
+    if value in {"pe ratio", "p e ratio"} or value == "pe":
+        return "pe"
+    if value in {"eps", "eps basic"} or value.startswith("eps"):
+        return "eps"
     return value
 
 
@@ -499,6 +517,166 @@ def _money_from_cell(text: str) -> float | None:
     return _number(text)
 
 
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _crore_amount(text: str) -> float | None:
+    cleaned = _clean(text)
+    if not re.search(r"\bcrores?\b|\bcr\.?\b", cleaned, re.I):
+        return None
+    return _number(cleaned)
+
+
+def _share_count(text: str) -> float | None:
+    if not re.search(r"share", text, re.I):
+        return None
+    return _number(text)
+
+
+def _heading_for(table: Tag) -> str:
+    heading = table.find_previous(["h2", "h3", "h4"])
+    return _cell_text(heading) if heading else ""
+
+
+def _kpi_key(text: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    if value.startswith("roe") or value == "return on equity":
+        return "roe"
+    if value.startswith("roce"):
+        return "roce"
+    if "ebitda margin" in value:
+        return "ebitda_margin"
+    if "pat margin" in value:
+        return "pat_margin"
+    if "debt to equity" in value:
+        return "de"
+    if "earning per share" in value or value.startswith("eps"):
+        return "eps"
+    if "p e" in value or "pe ratio" in value or value == "pe":
+        return "pe"
+    if "ronw" in value or "return on net worth" in value:
+        return "ronw"
+    if "net asset value" in value or value.startswith("nav"):
+        return "nav"
+    return value
+
+
+def _parse_valuation_table(table: Tag, details: IpoDetails) -> None:
+    for row in table.find_all("tr"):
+        cells = row.find_all(["td", "th"], recursive=False)
+        if len(cells) < 2:
+            continue
+        key = _kpi_key(_cell_text(cells[0]))
+        value = _cell_text(cells[-1])
+        if value.lower() in {"n/a", "na", "-", "—"}:
+            continue
+        number = _number(value)
+        if number is None:
+            continue
+        if key == "eps" and details.eps is None:
+            details.eps = number
+        elif key == "pe" and details.pe_ratio is None:
+            details.pe_ratio = number
+        elif key == "nav" and details.nav is None:
+            details.nav = number
+        elif key == "pat_margin" and details.pat_margin is None:
+            details.pat_margin = number
+        elif key == "ebitda_margin" and details.ebitda_margin is None:
+            details.ebitda_margin = number
+        elif key == "roe" and details.roe is None:
+            details.roe = number
+        elif key == "roce" and details.roce is None:
+            details.roce = number
+        elif key == "de" and details.debt_to_equity is None:
+            details.debt_to_equity = number
+        elif key == "ronw" and details.roe is None:
+            details.roe = number
+
+
+def _parse_peer_table(table: Tag, details: IpoDetails) -> None:
+    headers, header_row = _table_headers(table)
+    pe_key = "pe" if "pe" in headers else None
+    if pe_key is None:
+        return
+    multiples: list[float] = []
+    for row in table.find_all("tr"):
+        if row is header_row:
+            continue
+        cells = row.find_all(["td", "th"], recursive=False)
+        if len(cells) < 2:
+            continue
+        pe = _number(_value(cells, headers, pe_key))
+        if pe is not None and pe > 0:
+            multiples.append(pe)
+    if len(multiples) >= 2:
+        details.peer_count = len(multiples)
+        details.peer_median_pe = round(_median(multiples) or 0.0, 2)
+
+
+def _parse_promoter_table(table: Tag, details: IpoDetails) -> None:
+    headers, header_row = _table_headers(table)
+    for row in table.find_all("tr"):
+        if row is header_row:
+            continue
+        cells = row.find_all(["td", "th"], recursive=False)
+        label = _cell_text(cells[0]).lower() if cells else ""
+        if "promoter" not in label or "total" in label or "others" in label:
+            continue
+        pre = _number(_value(cells, headers, "pre_pct"))
+        post = _number(_value(cells, headers, "post_pct"))
+        if pre is not None:
+            details.promoter_pre_pct = pre
+        if post is not None:
+            details.promoter_post_pct = post
+        return
+
+
+def _parse_objects_table(table: Tag, details: IpoDetails) -> None:
+    flags: list[str] = []
+    allocated: list[tuple[str, float]] = []
+    for row in table.find_all("tr"):
+        cells = row.find_all(["td", "th"], recursive=False)
+        if len(cells) < 2:
+            continue
+        purpose = _cell_text(cells[0]).lower()
+        if purpose in {"purpose", "objects"}:
+            continue
+        amount = _crore_amount(_cell_text(cells[-1])) or _number(_cell_text(cells[-1]))
+        if "repay" in purpose or "pre-payment" in purpose or "prepayment" in purpose or "debt" in purpose:
+            flag = "debt_repay"
+        elif "land" in purpose:
+            flag = "land"
+        elif "capital expenditure" in purpose or "capex" in purpose or "plant" in purpose:
+            flag = "capex"
+        else:
+            flag = ""
+        if flag and flag not in flags:
+            flags.append(flag)
+        if amount is not None and amount > 0:
+            allocated.append((flag or "other", amount))
+    details.objects_flags = flags
+    total = sum(amount for _, amount in allocated)
+    debt = sum(amount for flag, amount in allocated if flag == "debt_repay")
+    if total > 0:
+        details.objects_debt_share = debt / total
+
+
+def _financial_rank(heading: str) -> int:
+    lowered = heading.lower()
+    if "company financial" in lowered or "financial report" in lowered:
+        return 2
+    if "financial performance" in lowered:
+        return 0
+    return 1
+
+
 def parse_detail_html(html: str, expected_name: str, reference: date) -> IpoDetails:
     soup = BeautifulSoup(html, "lxml")
     expected = normalize_name(expected_name)
@@ -520,24 +698,43 @@ def parse_detail_html(html: str, expected_name: str, reference: date) -> IpoDeta
             tables.append(element)
 
     details = IpoDetails()
-    annual_financials: list[tuple[int, float | None, float | None]] = []
+    financials_by_rank: dict[int, list[tuple[int, float | None, float | None]]] = {0: [], 1: [], 2: []}
     for table in tables:
         rows = table.find_all("tr")
         headers, header_row = _table_headers(table)
+        heading = _heading_for(table)
+        heading_l = heading.lower()
+
         if {"period ended", "revenue", "pat"}.issubset(headers):
+            years: list[tuple[int, float | None, float | None]] = []
             for row in rows:
                 if row is header_row:
                     continue
                 cells = row.find_all(["td", "th"], recursive=False)
                 period = _value(cells, headers, "period ended")
                 if re.fullmatch(r"\d{4}", period):
-                    annual_financials.append(
+                    years.append(
                         (
                             int(period),
                             _money_from_cell(_value(cells, headers, "revenue")),
                             _money_from_cell(_value(cells, headers, "pat")),
                         )
                     )
+            financials_by_rank[_financial_rank(heading)].extend(years)
+            continue
+        if "valuation" in heading_l:
+            _parse_valuation_table(table, details)
+            continue
+        if "peer" in heading_l:
+            _parse_peer_table(table, details)
+            continue
+        if "promoter" in heading_l and "holding" in heading_l:
+            _parse_promoter_table(table, details)
+            continue
+        if "objects of the issue" in heading_l:
+            _parse_objects_table(table, details)
+            continue
+
         for row in rows:
             cells = row.find_all(["td", "th"], recursive=False)
             if len(cells) < 2:
@@ -546,18 +743,112 @@ def parse_detail_html(html: str, expected_name: str, reference: date) -> IpoDeta
             value = _cell_text(cells[-1])
             if key == "issue size" and not details.issue_size:
                 details.issue_size = value
+                details.issue_size_cr = _crore_amount(value)
+            elif key in {"fresh issue", "fresh"} and not details.fresh_issue:
+                details.fresh_issue = value
+                details.fresh_issue_cr = _crore_amount(value)
+            elif key in {"ofs", "offer for sale"} and not details.ofs:
+                details.ofs = value
+                details.ofs_cr = _crore_amount(value)
+                details.ofs_shares = _share_count(value)
             elif key == "listing_date" and not details.listing_date:
                 details.listing_date = _parse_full_date(value, reference)
+            elif key == "listing_venue" and not details.listing_venue:
+                details.listing_venue = value
             elif _cell_text(cells[0]).lower() == "retail minimum" and len(cells) >= 4:
                 details.lot_size = int(_number(_cell_text(cells[2])) or 0) or None
                 details.min_application = _money_from_cell(_cell_text(cells[-1]))
 
+    annual_financials: list[tuple[int, float | None, float | None]] = []
+    for rank in (2, 1, 0):
+        if financials_by_rank[rank]:
+            annual_financials = financials_by_rank[rank]
+            break
     annual_financials.sort()
     if annual_financials:
         _, details.latest_revenue, details.latest_pat = annual_financials[-1]
     if len(annual_financials) > 1:
         _, details.previous_revenue, details.previous_pat = annual_financials[-2]
+    details.issue_mix = _classify_issue_mix(details.fresh_issue, details.ofs)
     return details
+
+
+def parse_gmp_performance(html: str) -> GmpCalibration | None:
+    soup = BeautifulSoup(html, "lxml")
+    misses: list[float] = []
+    band_values: dict[str, list[float]] = {}
+    for table in soup.find_all("table"):
+        headers, header_row = _table_headers(table)
+        heading = _heading_for(table).lower()
+        is_performance = "performance" in heading or (
+            {"name", "gmp", "listing_price"}.issubset(headers) and "status" not in headers
+        )
+        if not header_row or not is_performance:
+            continue
+        price_key = "ipo_price" if "ipo_price" in headers else "price"
+        if price_key not in headers or "listing_price" not in headers:
+            continue
+        for row in table.find_all("tr"):
+            if row is header_row:
+                continue
+            cells = row.find_all(["td", "th"], recursive=False)
+            price = _number(_value(cells, headers, price_key))
+            gmp = parse_gmp_amount(_value(cells, headers, "gmp"))
+            listing = _number(_value(cells, headers, "listing_price"))
+            if not price or listing is None:
+                continue
+            gmp_pct = gmp / price * 100
+            listing_pct = (listing - price) / price * 100
+            miss = listing_pct - gmp_pct
+            misses.append(miss)
+            key = (
+                "<=0"
+                if gmp_pct <= 0
+                else "0-12"
+                if gmp_pct < 12
+                else "12-40"
+                if gmp_pct <= 40
+                else "40-60"
+                if gmp_pct <= 60
+                else "60-80"
+                if gmp_pct < 80
+                else ">=80"
+            )
+            band_values.setdefault(key, []).append(miss)
+        if misses:
+            break
+    if len(misses) < 3:
+        return None
+    return GmpCalibration(
+        sample_size=len(misses),
+        median_miss_pp=round(_median(misses) or 0.0, 2),
+        band_miss={key: round(_median(values) or 0.0, 2) for key, values in band_values.items()},
+        band_n={key: len(values) for key, values in band_values.items()},
+    )
+
+
+def _has_positive_amount(text: str | None) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered in {"-", "—", "n/a", "nil", "na"}:
+        return False
+    value = _number(text)
+    if value is not None:
+        return value > 0
+    return bool(re.search(r"[1-9]", text))
+
+
+def _classify_issue_mix(fresh: str | None, ofs: str | None) -> str | None:
+    has_fresh = _has_positive_amount(fresh)
+    has_ofs = _has_positive_amount(ofs)
+    if has_fresh and has_ofs:
+        return "mixed"
+    if has_ofs:
+        return "ofs"
+    if has_fresh:
+        return "fresh"
+    return None
 
 
 def _validate_html(response: httpx.Response, url: str) -> str:
@@ -624,7 +915,12 @@ def _attach_crosscheck(records: list[IpoRecord], alternates: list[IpoRecord]) ->
             record.alternate_gmp_rs = match.gmp_rs
 
 
-def _preliminary_candidates(records: list[IpoRecord], today: date) -> list[IpoRecord]:
+def closing_soon_candidates(
+    records: list[IpoRecord],
+    today: date,
+    *,
+    limit: int = 12,
+) -> list[IpoRecord]:
     eligible = [
         record
         for record in records
@@ -632,14 +928,16 @@ def _preliminary_candidates(records: list[IpoRecord], today: date) -> list[IpoRe
         and record.open_date is not None
         and record.close_date is not None
         and record.open_date <= today <= record.close_date
+        and "status/date mismatch" not in record.warnings
         and closes_within_days(record, today)
         and (record.gain_pct or 0) > 0
+        and record.url
     ]
     return sorted(
         eligible,
         key=lambda record: ((15 if record.ipo_type == "Mainboard" else 0) + (record.gain_pct or 0)),
         reverse=True,
-    )[:3]
+    )[:limit]
 
 
 def scrape_market_data(*, now: datetime | None = None) -> list[IpoRecord]:
@@ -648,9 +946,11 @@ def scrape_market_data(*, now: datetime | None = None) -> list[IpoRecord]:
     premium_error: Exception | None = None
     primary: list[IpoRecord] = []
     premium: list[IpoRecord] = []
+    primary_html = ""
 
     try:
-        primary = parse_ipowatch_gmp_html(fetch_html(GMP_URL), now=now)
+        primary_html = fetch_html(GMP_URL)
+        primary = parse_ipowatch_gmp_html(primary_html, now=now)
         if not any(record.status in {"Open", "Upcoming"} for record in primary):
             raise ScrapeError("IPO Watch returned no active or upcoming IPO rows")
     except (ScrapeError, httpx.HTTPError) as exc:
@@ -670,6 +970,10 @@ def scrape_market_data(*, now: datetime | None = None) -> list[IpoRecord]:
             f"All GMP sources failed; IPO Watch: {primary_error}; IPO Premium: {premium_error}"
         )
     records = primary or premium
+    calibration = parse_gmp_performance(primary_html) if primary_html else None
+    if calibration:
+        for record in records:
+            record.gmp_calibration = calibration
 
     try:
         subscriptions = parse_subscription_html(fetch_html(SUBSCRIPTION_URL), now=now)
@@ -681,13 +985,15 @@ def scrape_market_data(*, now: datetime | None = None) -> list[IpoRecord]:
     if primary and premium:
         _attach_crosscheck(records, premium)
 
-    for record in _preliminary_candidates(records, now.date()):
-        if not record.url:
+    for record in closing_soon_candidates(records, now.date()):
+        url = record.url
+        if not url:
             continue
         try:
-            record.details = parse_detail_html(fetch_html(record.url), record.name, now.date())
+            record.details = parse_detail_html(fetch_html(url), record.name, now.date())
         except (ScrapeError, httpx.HTTPError):
             record.warnings.append("verified detail metadata unavailable")
+        finalize_ipo_record(record)
     return records
 
 

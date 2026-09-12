@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from src.formatter import format_digest
-from src.models import IpoDetails, IpoRecord, SubscriptionData
+from src.models import GmpCalibration, IpoDetails, IpoRecord, SubscriptionData
 from src.recommend import recommend_ipos, score_ipo
 from src.scraper import IST
 
@@ -147,7 +147,7 @@ def test_formatter_escapes_html_and_stays_under_telegram_limit() -> None:
 
 def test_empty_result_formats_explicit_no_signal_message() -> None:
     message = format_digest([], 10, now=NOW)[0]
-    assert "No strong apply signal today" in message
+    assert "No clear IPO to apply today" in message
     assert "closing within 2 days" in message
     assert "not investment advice" in message
 
@@ -177,13 +177,143 @@ def test_recommend_keeps_only_ipos_closing_within_two_days() -> None:
     assert "Closes Later" not in names
 
 
+def test_retail_led_book_scores_below_qib_led_book() -> None:
+    qib_led = record("QIB Led")
+    retail_led = record("Retail Led")
+    retail_led.subscription = SubscriptionData(
+        qib=0.2,
+        nii=20,
+        retail=25,
+        total=18,
+        updated_at=NOW - timedelta(hours=1),
+    )
+    qib_score = score_ipo(qib_led, 10, now=NOW)
+    retail_score = score_ipo(retail_led, 10, now=NOW)
+
+    assert qib_score.score > retail_score.score
+    assert any("weak QIB" in flag for flag in retail_score.risk_flags)
+
+
+def test_ofs_only_issue_is_penalised() -> None:
+    fresh = record("Fresh Capital")
+    fresh.details = IpoDetails(latest_pat=20, previous_pat=15, issue_mix="fresh")
+    ofs = record("OFS Exit")
+    ofs.details = IpoDetails(latest_pat=20, previous_pat=15, issue_mix="ofs")
+
+    assert score_ipo(fresh, 10, now=NOW).score > score_ipo(ofs, 10, now=NOW).score
+
+
+def test_extreme_sme_gmp_does_not_outrank_reasonable_mainboard() -> None:
+    mainboard = record("Reasonable Mainboard", gain=22)
+    hype_sme = record("Hype SME", ipo_type="SME", gain=120)
+    picked = recommend_ipos([mainboard, hype_sme], 10, now=NOW)[0]
+    assert picked.ipo.name == "Reasonable Mainboard"
+
+
 def test_formatter_includes_full_details_for_every_ipo() -> None:
     first = score_ipo(record("LCC Projects"), 10, now=NOW)
     second = score_ipo(record("Rentomojo", gain=34), 10, now=NOW)
     message = "\n".join(format_digest([first, second], 10, now=NOW))
 
-    assert "1. CONSIDER ·" in message
-    assert "2. CONSIDER ·" in message
-    assert message.count("Est. listing") == 2
-    assert message.count("Subscription") >= 2
+    assert "Today's pick:" in message
+    assert "Also #2:" in message
+    assert "Verdict: <b>Apply</b>" in message
+    assert message.count("if listed near GMP") == 2
+    assert message.count("Demand: institutions") == 2
+    assert "CONSIDER" not in message
     assert "Also watch" not in message
+    assert "QIB" not in message
+
+
+def test_undersubscribed_last_day_is_not_consider() -> None:
+    thin = record("Thin Book")
+    thin.subscription = SubscriptionData(
+        qib=0.1,
+        nii=0.2,
+        retail=0.3,
+        total=0.4,
+        updated_at=NOW - timedelta(hours=1),
+    )
+    result = score_ipo(thin, 10, now=NOW)
+
+    assert result.label == "WATCH"
+    assert any("undersubscribed" in flag for flag in result.risk_flags)
+
+
+def test_expensive_peer_multiple_blocks_consider() -> None:
+    expensive = record("Expensive")
+    expensive.details = IpoDetails(latest_pat=20, previous_pat=15, eps=5, peer_median_pe=10)
+    result = score_ipo(expensive, 10, now=NOW)
+
+    assert result.label == "WATCH"
+    assert any("expensive versus listed peers" in flag for flag in result.risk_flags)
+    assert "Value: P/E ~20 vs listed peers ~10 (expensive)" in format_digest(
+        [result], 10, now=NOW
+    )[0]
+
+
+def test_gmp_history_dampens_but_does_not_boost() -> None:
+    base = score_ipo(record("Base"), 10, now=NOW)
+    damped = record("Damped")
+    damped.gmp_calibration = GmpCalibration(
+        sample_size=80,
+        median_miss_pp=-5,
+        band_miss={"12-40": -4.0},
+        band_n={"12-40": 40},
+    )
+    boosted = record("Boosted")
+    boosted.gmp_calibration = GmpCalibration(
+        sample_size=80,
+        median_miss_pp=8,
+        band_miss={"12-40": 10.0},
+        band_n={"12-40": 40},
+    )
+
+    damped_result = score_ipo(damped, 10, now=NOW)
+    boosted_result = score_ipo(boosted, 10, now=NOW)
+
+    assert damped_result.score < base.score
+    assert boosted_result.score == base.score
+    assert any("listed below the grey-market price" in flag for flag in damped_result.risk_flags)
+
+
+def test_debt_repay_and_profit_spike_are_penalised() -> None:
+    clean = record("Clean")
+    clean.details = IpoDetails(latest_pat=20, previous_pat=15, objects_flags=["capex"])
+    debt = record("Debt IPO")
+    debt.details = IpoDetails(
+        latest_pat=20,
+        previous_pat=15,
+        objects_flags=["debt_repay"],
+        objects_debt_share=0.8,
+    )
+    spike = record("Spike")
+    spike.details = IpoDetails(latest_pat=20, previous_pat=5)
+
+    assert score_ipo(clean, 10, now=NOW).score > score_ipo(debt, 10, now=NOW).score
+    spike_result = score_ipo(spike, 10, now=NOW)
+    assert any("jumped too sharply" in flag for flag in spike_result.risk_flags)
+
+
+def test_normal_promoter_float_is_not_treated_as_an_exit() -> None:
+    listed = record("Normal Float")
+    listed.details = IpoDetails(
+        latest_pat=20,
+        previous_pat=15,
+        promoter_pre_pct=100,
+        promoter_post_pct=75,
+    )
+    diluted = record("Dilution")
+    diluted.details = IpoDetails(
+        latest_pat=20,
+        previous_pat=15,
+        promoter_pre_pct=92,
+        promoter_post_pct=64,
+    )
+
+    listed_result = score_ipo(listed, 10, now=NOW)
+    diluted_result = score_ipo(diluted, 10, now=NOW)
+
+    assert listed_result.score > diluted_result.score
+    assert not any("promoter" in flag for flag in listed_result.risk_flags)
+    assert any("promoter holding drops sharply" in flag for flag in diluted_result.risk_flags)

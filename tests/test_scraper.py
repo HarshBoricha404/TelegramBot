@@ -5,12 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from src.models import IpoRecord, finalize_ipo_record
 from src.scraper import (
     IST,
     ScrapeError,
+    closing_soon_candidates,
     normalize_name,
     parse_date_range,
     parse_detail_html,
+    parse_gmp_performance,
     parse_ipowatch_gmp_html,
     parse_premium_html,
     parse_subscription_html,
@@ -103,6 +106,89 @@ def test_detail_parser_ignores_unrelated_content_before_matching_heading() -> No
     assert details.min_application == 14948
     assert details.listing_date == date(2026, 9, 17)
     assert (details.previous_pat, details.latest_pat) == (43.11, 104.30)
+    assert details.fresh_issue == "Approx ₹150 Crores"
+    assert details.fresh_issue_cr == 150
+    assert details.issue_size_cr == 1255.57
+    assert details.ofs_shares == 27365529
+    assert details.issue_mix == "mixed"
+    assert details.listing_venue == "BSE, NSE"
+    assert details.eps == 20
+    assert details.nav == 80
+    assert details.pat_margin == 12
+    assert details.debt_to_equity == 0.4
+    assert details.peer_median_pe == 30
+    assert details.peer_count == 2
+    assert (details.promoter_pre_pct, details.promoter_post_pct) == (90, 72)
+    assert details.objects_debt_share == 100 / 120
+    assert "debt_repay" in details.objects_flags
+    assert "capex" in details.objects_flags
+
+
+def test_gmp_performance_table_calibrates_listing_miss() -> None:
+    calibration = parse_gmp_performance(fixture("gmp_new.html"))
+
+    assert calibration is not None
+    assert calibration.sample_size == 4
+    assert calibration.median_miss_pp == -5
+
+
+def test_finalize_converts_ofs_shares_using_issue_price() -> None:
+    details = parse_detail_html(
+        fixture("detail_contaminated.html"),
+        "Rentomojo",
+        date(2026, 9, 11),
+    )
+    record = IpoRecord(
+        name="Rentomojo",
+        ipo_type="Mainboard",
+        status="Open",
+        source="IPO Watch",
+        source_url="https://ipowatch.in/gmp/",
+        price_high=404,
+        details=details,
+    )
+    finalize_ipo_record(record)
+
+    assert record.details is not None
+    assert record.details.implied_pe == 20.2
+    assert record.details.pb_ratio == 5.05
+    assert record.details.issue_mix == "ofs"
+
+
+def test_closing_soon_candidates_include_every_eligible_ipo() -> None:
+    today = date(2026, 9, 11)
+    records = [
+        IpoRecord(
+            name=f"IPO {index}",
+            ipo_type="Mainboard",
+            status="Open",
+            source="IPO Watch",
+            source_url="https://ipowatch.in/gmp/",
+            gain_pct=20 + index,
+            open_date=date(2026, 9, 9),
+            close_date=date(2026, 9, 11),
+            url=f"https://ipowatch.in/ipo-{index}/",
+        )
+        for index in range(5)
+    ]
+    records.append(
+        IpoRecord(
+            name="Later",
+            ipo_type="Mainboard",
+            status="Open",
+            source="IPO Watch",
+            source_url="https://ipowatch.in/gmp/",
+            gain_pct=90,
+            open_date=date(2026, 9, 9),
+            close_date=date(2026, 9, 20),
+            url="https://ipowatch.in/later/",
+        )
+    )
+
+    picked = closing_soon_candidates(records, today)
+
+    assert len(picked) == 5
+    assert "Later" not in {item.name for item in picked}
 
 
 def test_detail_parser_rejects_identity_mismatch() -> None:

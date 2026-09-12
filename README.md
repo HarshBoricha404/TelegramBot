@@ -10,7 +10,9 @@ Primary sources:
 
 - [IPO Watch live GMP](https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/) for Mainboard/SME type, GMP, trend, price, estimated listing gain, status, and timestamps
 - [IPO Watch subscription status](https://ipowatch.in/ipo-subscription-status-today/) for QIB, NII, retail, and total demand
-- IPO Watch detail pages for the top three candidates' total issue size, lot/application amount, listing date, and annual revenue/PAT
+- IPO Watch detail pages for every closing-soon candidate: issue size, lot/application amount, listing venue, annual revenue/PAT, EPS/NAV, peer P/E, promoter holding, and objects of the issue
+
+- IPO Watch [GMP vs listing history](https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/) to dampen rich premiums when recent IPOs listed below GMP
 
 [IPO Premium](https://www.ipopremium.in/) is used to cross-check top GMP values and as a fallback when IPO Watch cannot be parsed.
 
@@ -24,9 +26,23 @@ Only an IPO that is **open today**, **closes today or within the next 2 days**, 
 - `WATCH`: stale/disputed, below the strong threshold, or still open but closing later
 - `LOW SIGNAL`: non-positive GMP or weak/conflicting evidence
 
-The 0–100 signal score uses capped GMP strength, live subscription demand, Mainboard liquidity preference, freshness/source agreement, and GMP trend. Verified recent losses or persistent annual PAT decline reduce the score. Missing optional detail metadata is neutral.
+The 0–100 signal score now follows a listing-gain checklist, not “highest GMP wins”:
 
-Mainboard is preferred. An SME becomes the primary pick only when its score is at least 15 points above the best qualifying Mainboard IPO, or no Mainboard IPO qualifies.
+- GMP quality: 12–40% is the useful band; extreme SME GMP is treated as hype
+- Recent listing-vs-GMP history dampens rich premiums; it never adds points when listings beat GMP
+- Demand quality: QIB is weighted more than HNI/retail; weak or undersubscribed books are penalised, including on the last day
+- Mainboard liquidity preference; SME must lead by 20 points to take #1
+- Fresh GMP, rising trend, and source agreement
+- Growing PAT/revenue help; losses, a sharp PAT drop, or a sudden profit spike hurt
+- Implied P/E versus listed peers and high P/B are used when the detail page has EPS/NAV
+- Fresh issue is preferred over a mostly-OFS exit; debt-repay objects and sharp promoter dilution are penalised
+- Heavy oversubscription is flagged as a lottery, not extra strength
+
+Detail pages are fetched for every open issue closing within 2 days (not only the GMP top 3).
+
+The bot cannot read an RHP for promoter integrity or business model. Those still need a human.
+
+Mainboard is preferred. An SME becomes the primary pick only when its score is at least 20 points above the best qualifying Mainboard IPO, or no Mainboard IPO qualifies.
 
 At 9:00 AM, same-day bidding has not started. Subscription figures are therefore usually the latest prior-session snapshot; the Telegram message displays the source timestamps.
 
