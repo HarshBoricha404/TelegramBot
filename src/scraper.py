@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import time
-from calendar import monthrange
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from urllib.parse import urlsplit, urlunsplit
@@ -21,6 +20,7 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 )
 IST = ZoneInfo("Asia/Kolkata")
+CLOSE_WITHIN_DAYS = 2
 
 _MONTHS = {
     "jan": 1,
@@ -286,6 +286,19 @@ def _trend(text: str) -> str:
     if "🟡" in text or "yellow" in value or "stable" in value:
         return "stable"
     return "unknown"
+
+
+def closes_within_days(
+    record: IpoRecord,
+    today: date,
+    *,
+    days: int = CLOSE_WITHIN_DAYS,
+) -> bool:
+    """True when the IPO closes today or within the next `days` calendar days."""
+    if record.close_date is None:
+        return False
+    remaining = (record.close_date - today).days
+    return 0 <= remaining <= days
 
 
 def _status_from_dates(open_date: date | None, close_date: date | None, today: date) -> str:
@@ -619,6 +632,7 @@ def _preliminary_candidates(records: list[IpoRecord], today: date) -> list[IpoRe
         and record.open_date is not None
         and record.close_date is not None
         and record.open_date <= today <= record.close_date
+        and closes_within_days(record, today)
         and (record.gain_pct or 0) > 0
     ]
     return sorted(

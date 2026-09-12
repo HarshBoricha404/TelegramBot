@@ -25,8 +25,10 @@ def run() -> int:
         return 1
 
     try:
-        message = build_digest(config.min_gain_pct)
-        send_message(config.telegram_bot_token, config.telegram_channel_id, message)
+        messages = build_digest(config.min_gain_pct)
+        for message in messages:
+            send_message(config.telegram_bot_token, config.telegram_channel_id, message)
+        logger.info("Posted %s message(s) to %s", len(messages), config.telegram_channel_id)
     except ScrapeError as exc:
         logger.error("%s", exc)
         try:
@@ -43,7 +45,6 @@ def run() -> int:
         logger.error("%s", exc)
         return 1
 
-    logger.info("Posted digest to %s", config.telegram_channel_id)
     return 0
 
 

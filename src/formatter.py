@@ -35,10 +35,11 @@ def _name(record: IpoRecord) -> str:
     return name
 
 
-def _full_signal(result: SignalResult) -> str:
+def _full_signal(result: SignalResult, index: int | None = None) -> str:
     ipo = result.ipo
+    prefix = f"{index}. " if index is not None else ""
     lines = [
-        f"<b>{escape(result.label)} · {_name(ipo)} — {escape(ipo.ipo_type)} · {escape(ipo.status)}</b>",
+        f"<b>{prefix}{escape(result.label)} · {_name(ipo)} — {escape(ipo.ipo_type)} · {escape(ipo.status)}</b>",
         f"Signal <b>{result.score:.0f}/100</b> · Confidence: {escape(result.confidence)}",
         "",
         f"GMP <b>{_money(ipo.gmp_rs)} ({(ipo.gain_pct or 0):.2f}%)</b> · {escape(ipo.trend.title())}",
@@ -78,20 +79,11 @@ def _full_signal(result: SignalResult) -> str:
     return "\n".join(lines)
 
 
-def _compact_signal(index: int, result: SignalResult) -> str:
-    ipo = result.ipo
-    return (
-        f"{index}. <b>{escape(result.label)}</b> · {_name(ipo)} — {escape(ipo.ipo_type)}\n"
-        f"   Signal {result.score:.0f}/100 · GMP {_money(ipo.gmp_rs)} "
-        f"({(ipo.gain_pct or 0):.1f}%) · {escape(ipo.status)}"
-    )
-
-
 def format_digest(
     signals: list[SignalResult],
     min_gain_pct: float,
     now: datetime | None = None,
-) -> str:
+) -> list[str]:
     now = now or datetime.now(IST)
     actionable = bool(signals and signals[0].label == "CONSIDER")
     title = "Strongest IPO signal" if actionable else "No strong apply signal today"
@@ -102,29 +94,31 @@ def format_digest(
     )
 
     if not signals:
-        return (
-            f"{header}\n\nNo open or upcoming IPO has a positive parseable GMP today."
+        return [
+            f"{header}\n\nNo open IPO closing within 2 days has a positive parseable GMP today."
             f"\nThreshold: {min_gain_pct:g}%{disclaimer}"
-        )
+        ]
 
-    sections = [header, _full_signal(signals[0])]
-    alternatives = [_compact_signal(i, result) for i, result in enumerate(signals[1:], start=2)]
-    if alternatives:
-        sections.append("<b>Also watch</b>\n" + "\n\n".join(alternatives))
     sources = sorted({result.ipo.source for result in signals})
     footer = f"\nSources: {escape(', '.join(sources))}"
-    message = "\n\n".join(sections) + footer + disclaimer
+    limit = 3800
+    messages: list[str] = []
+    current = [header]
+    for index, result in enumerate(signals, start=1):
+        block = _full_signal(result, index=index)
+        candidate = "\n\n".join(current + [block])
+        if len(candidate) > limit and len(current) > 1:
+            messages.append("\n\n".join(current))
+            current = [f"<b>IPO signal continued — {_format_day(now.date())}</b>", block]
+        else:
+            current.append(block)
 
-    # Leave headroom because Telegram counts some Unicode characters as two UTF-16 units.
-    while len(message) > 3800 and alternatives:
-        alternatives.pop()
-        sections = [header, _full_signal(signals[0])]
-        if alternatives:
-            sections.append("<b>Also watch</b>\n" + "\n\n".join(alternatives))
-        message = "\n\n".join(sections) + footer + disclaimer
-    if len(message) > 3800:
-        message = (
-            f"{header}\n\n{_compact_signal(1, signals[0])}"
-            f"\n\nThreshold: {min_gain_pct:g}%{footer}{disclaimer}"
+    last = "\n\n".join(current) + footer + disclaimer
+    if len(last) > limit and len(current) > 2:
+        messages.append("\n\n".join(current[:-1]))
+        last = (
+            f"<b>IPO signal continued — {_format_day(now.date())}</b>\n\n"
+            f"{current[-1]}{footer}{disclaimer}"
         )
-    return message
+    messages.append(last)
+    return messages

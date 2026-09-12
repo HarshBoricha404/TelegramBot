@@ -4,7 +4,7 @@ import math
 from datetime import date, datetime
 
 from src.models import IpoRecord, SignalResult
-from src.scraper import IST
+from src.scraper import IST, CLOSE_WITHIN_DAYS, closes_within_days
 
 CONSIDER_SCORE = 60.0
 
@@ -115,6 +115,7 @@ def score_ipo(
 
     score = round(max(0.0, min(100.0, score)), 1)
     open_today = _is_open(record, today)
+    closing_soon = closes_within_days(record, today)
     critical_risk = any(
         flag in risk_flags
         for flag in (
@@ -124,6 +125,7 @@ def score_ipo(
     )
     actionable = (
         open_today
+        and closing_soon
         and gmp_fresh
         and record.price_high is not None
         and (record.gmp_rs or 0) > 0
@@ -152,8 +154,14 @@ def score_ipo(
     else:
         confidence = "Low"
 
-    if open_today:
-        reasons.append("open for applications today")
+    if open_today and closing_soon and record.close_date is not None:
+        remaining = (record.close_date - today).days
+        if remaining == 0:
+            reasons.append("closes today")
+        else:
+            reasons.append(f"closes in {remaining} day(s)")
+    elif open_today and not closing_soon:
+        reasons.append(f"open, but close is more than {CLOSE_WITHIN_DAYS} days away")
     elif record.status == "Upcoming":
         reasons.append("upcoming; not open for applications")
 
@@ -179,7 +187,10 @@ def recommend_ipos(
     relevant = [
         result
         for result in results
-        if result.ipo.status in {"Open", "Upcoming"} and (result.ipo.gain_pct or 0) > 0
+        if result.ipo.status == "Open"
+        and _is_open(result.ipo, now.date())
+        and closes_within_days(result.ipo, now.date())
+        and (result.ipo.gain_pct or 0) > 0
     ]
     relevant.sort(key=lambda result: result.score, reverse=True)
 

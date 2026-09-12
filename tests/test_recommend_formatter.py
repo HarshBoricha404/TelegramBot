@@ -137,7 +137,7 @@ def test_formatter_escapes_html_and_stays_under_telegram_limit() -> None:
     unsafe = record("<script>alert(1)</script>" + "x" * 5000)
     unsafe.url = "javascript:alert(1)"
     signal = score_ipo(unsafe, 10, now=NOW)
-    message = format_digest([signal], 10, now=NOW)
+    message = format_digest([signal], 10, now=NOW)[0]
 
     assert "<script>" not in message
     assert "&lt;script&gt;" in message
@@ -146,6 +146,44 @@ def test_formatter_escapes_html_and_stays_under_telegram_limit() -> None:
 
 
 def test_empty_result_formats_explicit_no_signal_message() -> None:
-    message = format_digest([], 10, now=NOW)
+    message = format_digest([], 10, now=NOW)[0]
     assert "No strong apply signal today" in message
+    assert "closing within 2 days" in message
     assert "not investment advice" in message
+
+
+def test_open_ipo_closing_later_is_not_consider() -> None:
+    later = record("Far Close", close_date=date(2026, 9, 16))
+    result = score_ipo(later, 10, now=NOW)
+
+    assert result.label == "WATCH"
+    assert any("more than 2 days away" in reason for reason in result.reasons)
+
+
+def test_recommend_keeps_only_ipos_closing_within_two_days() -> None:
+    closing_today = record("Closes Today", close_date=date(2026, 9, 11))
+    closing_in_two = record("Closes In Two", close_date=date(2026, 9, 13))
+    closing_later = record("Closes Later", close_date=date(2026, 9, 15))
+    picked = recommend_ipos(
+        [closing_today, closing_in_two, closing_later],
+        10,
+        now=NOW,
+        limit=5,
+    )
+    names = [result.ipo.name for result in picked]
+
+    assert "Closes Today" in names
+    assert "Closes In Two" in names
+    assert "Closes Later" not in names
+
+
+def test_formatter_includes_full_details_for_every_ipo() -> None:
+    first = score_ipo(record("LCC Projects"), 10, now=NOW)
+    second = score_ipo(record("Rentomojo", gain=34), 10, now=NOW)
+    message = "\n".join(format_digest([first, second], 10, now=NOW))
+
+    assert "1. CONSIDER ·" in message
+    assert "2. CONSIDER ·" in message
+    assert message.count("Est. listing") == 2
+    assert message.count("Subscription") >= 2
+    assert "Also watch" not in message

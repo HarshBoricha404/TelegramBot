@@ -18,10 +18,10 @@ The bot never averages unofficial GMP values. A material source disagreement low
 
 ## Signal rules
 
-Only an IPO that is open today, has fresh and parseable data, positive GMP, and meets `MIN_GAIN_PCT` can receive `CONSIDER`.
+Only an IPO that is **open today**, **closes today or within the next 2 days**, has fresh and parseable data, positive GMP, and meets `MIN_GAIN_PCT` can receive `CONSIDER`.
 
-- `CONSIDER`: actionable open IPO with signal score at least 60
-- `WATCH`: upcoming, stale/disputed, or below the strong threshold
+- `CONSIDER`: actionable open IPO closing within 2 days, with signal score at least 60
+- `WATCH`: stale/disputed, below the strong threshold, or still open but closing later
 - `LOW SIGNAL`: non-positive GMP or weak/conflicting evidence
 
 The 0–100 signal score uses capped GMP strength, live subscription demand, Mainboard liquidity preference, freshness/source agreement, and GMP trend. Verified recent losses or persistent annual PAT decline reduce the score. Missing optional detail metadata is neutral.
