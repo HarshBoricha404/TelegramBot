@@ -1,8 +1,49 @@
 # IPO Signal Telegram Bot
 
+[![Tests](https://github.com/HarshBoricha404/TelegramBot/actions/workflows/tests.yml/badge.svg)](https://github.com/HarshBoricha404/TelegramBot/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A free, deterministic Indian IPO signal bot. It validates current grey-market data, ranks actionable IPOs, and posts one daily Telegram update at **9:00 AM IST** using GitHub Actions.
 
 It uses no paid API, AI model, database, browser automation, or always-on server.
+
+## Run your own bot
+
+### 1. Fork the repository
+
+Select **Fork** at the top of this GitHub repository. GitHub Actions will run from your fork, independently of the original bot.
+
+### 2. Create a Telegram destination
+
+1. Open [@BotFather](https://t.me/BotFather), run `/newbot`, and save the token.
+2. Choose where the messages should go:
+   - **Private channel:** create a channel and add the bot as an administrator with only **Post Messages** permission.
+   - **Direct message:** open the new bot and send it a message first.
+3. Obtain the destination ID. A channel ID normally looks like `-100...`; a public channel username can be supplied as `@channelname`.
+
+Never put the token or destination ID in a committed file.
+
+### 3. Configure GitHub
+
+The workflow uses a protected GitHub Environment so deployment credentials remain separate from normal test runs.
+
+1. In your fork, open **Settings → Environments → New environment**.
+2. Name the environment exactly `TELEGRAM_BOT_TOKEN`.
+3. In that environment, add these **environment secrets**:
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHANNEL_ID`
+4. Optionally open **Settings → Secrets and variables → Actions → Variables** and add:
+   - `MIN_GAIN_PCT` — minimum positive GMP percentage; defaults to `10`.
+
+Environment secrets are not shared with forks or pull requests.
+
+### 4. Test and enable it
+
+1. Open **Actions → Daily IPO Signal**.
+2. Select **Run workflow**.
+3. Confirm the Telegram message and compare its data with the linked source pages.
+
+The scheduled workflow runs daily at `30 3 * * *` UTC, which is **9:00 AM IST**. GitHub schedules can be delayed. GitHub may disable schedules in inactive public repositories after 60 days; re-enable the workflow from the Actions page if needed.
 
 ## What it checks
 
@@ -46,37 +87,11 @@ Mainboard is preferred. An SME becomes the primary pick only when its score is a
 
 At 9:00 AM, same-day bidding has not started. Subscription figures are therefore usually the latest prior-session snapshot; the Telegram message displays the source timestamps.
 
-## Telegram setup
-
-1. Create a bot with [@BotFather](https://t.me/BotFather).
-2. For a channel, add the bot as an administrator with permission to post.
-3. For a direct message, send the bot a message first and use your numeric Telegram chat ID.
-
-## Free GitHub Actions deployment
-
-Push the repository to GitHub, then open:
-
-**Settings → Secrets and variables → Actions**
-
-Create repository secrets:
-
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHANNEL_ID` — numeric chat ID, `@channel`, or `-100...` channel ID
-
-Optionally create repository variable:
-
-- `MIN_GAIN_PCT` — defaults to `10` when absent or empty
-
-Open **Actions → Daily IPO Signal → Run workflow** and verify the first Telegram message against IPO Watch.
-
-The workflow runs from the default branch at `30 3 * * *` UTC (9:00 AM IST). GitHub may delay or occasionally drop scheduled jobs. In public repositories, GitHub automatically disables scheduled workflows after 60 days without repository activity; open the workflow and select **Enable workflow** to resume it.
-
-Standard runners are free for public repositories. GitHub Free private repositories include 2,000 Actions minutes per month; this bot normally uses far less than one minute per day.
-
 ## Local test and one-off post
 
 ```bash
-cd /Users/harsh/Desktop/TelegramBot
+git clone https://github.com/YOUR_USERNAME/TelegramBot.git
+cd TelegramBot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -91,6 +106,17 @@ python -m src.main
 ```
 
 Tests use committed HTML fragments and make no network requests.
+
+## Contributing
+
+Contributions are welcome, especially parser fixtures, source-layout fixes, scoring tests, and clearer Telegram copy.
+
+1. Fork the repository and create a focused branch.
+2. Make the change and add or update offline tests.
+3. Run `pytest -q`.
+4. Open a pull request explaining the data source, scoring rationale, and user-visible effect.
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before making a larger scoring or data-source change. Do not include real bot credentials, personal channel IDs, or scraped personal data in issues, fixtures, or pull requests.
 
 ## Failure behavior
 
@@ -113,3 +139,7 @@ Tests use committed HTML fragments and make no network requests.
 ## Disclaimer
 
 GMP is unofficial and unregulated by SEBI. This bot provides an informational signal, not personalized investment advice or guaranteed returns. Confirm the RHP, exchange data, application amount, and your own risk tolerance before investing.
+
+## License
+
+Released under the [MIT License](LICENSE).
